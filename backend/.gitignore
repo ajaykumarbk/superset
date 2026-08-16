@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Environment secrets – NEVER commit these
+.env
+.env.example
+
+# Build output
+dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS artifacts
+.DS_Store
+Thumbs.db

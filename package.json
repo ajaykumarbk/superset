@@ -1,0 +1,14 @@
+{
+  "name": "superset-monorepo",
+  "version": "1.0.0",
+  "description": "Monorepo runner for Superset: The Hidden Joker",
+  "scripts": {
+    "install-all": "npm install --prefix backend && npm install --prefix frontend",
+    "dev":   "concurrently \"npm run dev   --prefix backend\" \"npm run dev   --prefix frontend\"",
+    "build": "concurrently \"npm run build --prefix backend\" \"npm run build --prefix frontend\"",
+    "start": "npm run start --prefix backend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
