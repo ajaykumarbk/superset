@@ -42,7 +42,8 @@ export default function App() {
   // Socket lifecycle tied to auth
   useEffect(() => {
     if (!currentUser) { setSocket(null); setCurrentRoomState(null); setLogs([]); setSecretJoker(null); return; }
-    const s = io();
+    const backendUrl = (import.meta as any).env?.VITE_BACKEND_URL || undefined;
+    const s = backendUrl ? io(backendUrl) : io();
     setSocket(s);
 
     s.on('room_state', (state: RoomState) => {
