@@ -10,6 +10,8 @@ import { initDatabase } from './config/database';
 import { ENV } from './config/env';
 import authRoutes from './routes/auth';
 import gameRoutes from './routes/game';
+import walletRoutes from './routes/wallet';
+import { WalletModel } from './models/Wallet';
 import * as gm from './utils/gameManager';
 import { getCardRank, checkWinCondition } from './utils/cardUtils';
 import type { Room, Player } from './utils/gameManager';
@@ -31,57 +33,82 @@ app.use(express.static(path.join(__dirname, '../../frontend/dist')));
 // ── REST Routes ───────────────────────────────────────────────────────────────
 app.use('/api', authRoutes);
 app.use('/api', gameRoutes);
+app.use('/api', walletRoutes);
 
 // ── DB Init ───────────────────────────────────────────────────────────────────
 initDatabase().catch(err => { console.error('DB init failed:', err); process.exit(1); });
 
 // ── Matchmaking Queues ────────────────────────────────────────────────────────
-interface QueueEntry { userId: string; username: string; socketId: string; socket: Socket; }
+interface QueueEntry {
+  userId: string;
+  username: string;
+  socketId: string;
+  socket: Socket;
+  gameType: 'points' | 'pool' | 'deals' | 'practice';
+  stakePerPoint: number;
+  currencyType: 'practice' | 'cash';
+  capacity: number;
+}
 
-const queue2: QueueEntry[]               = [];
-const queue6: QueueEntry[]               = [];
-const matchmakingTimers                  = new Map<string, ReturnType<typeof setTimeout>>();
+// Map key format: `${gameType}_${capacity}_${currencyType}_${stakePerPoint}`
+const queuesMap = new Map<string, QueueEntry[]>();
+const matchmakingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function broadcastQueueStatus(queue: QueueEntry[], capacity: number): void {
-  queue.forEach(p => p.socket.emit('matchmaking_status', { position: queue.length, needed: capacity }));
+function getQueueKey(gameType: string, capacity: number, currencyType: string, stakePerPoint: number): string {
+  return `${gameType}_${capacity}_${currencyType}_${stakePerPoint}`;
+}
+
+function broadcastQueueStatus(queue: QueueEntry[]): void {
+  const cap = queue[0]?.capacity || 2;
+  queue.forEach(p => p.socket.emit('matchmaking_status', { position: queue.length, needed: cap }));
 }
 
 function removeFromQueues(userId: string): void {
-  const clear = (q: QueueEntry[], cap: number): void => {
+  if (matchmakingTimers.has(userId)) {
+    clearTimeout(matchmakingTimers.get(userId)!);
+    matchmakingTimers.delete(userId);
+  }
+  for (const [key, q] of queuesMap.entries()) {
     const idx = q.findIndex(p => p.userId === userId);
-    if (idx > -1) { q.splice(idx, 1); broadcastQueueStatus(q, cap); }
-  };
-  if (matchmakingTimers.has(userId)) { clearTimeout(matchmakingTimers.get(userId)!); matchmakingTimers.delete(userId); }
-  clear(queue2, 2);
-  clear(queue6, 6);
+    if (idx > -1) {
+      q.splice(idx, 1);
+      if (q.length > 0) broadcastQueueStatus(q);
+      else queuesMap.delete(key);
+    }
+  }
 }
 
 function handleQueueDisconnect(socketId: string): void {
-  const handle = (q: QueueEntry[], cap: number): void => {
+  for (const [key, q] of queuesMap.entries()) {
     const idx = q.findIndex(p => p.socketId === socketId);
     if (idx > -1) {
       const entry = q[idx];
       clearTimeout(matchmakingTimers.get(entry.userId)!);
       matchmakingTimers.delete(entry.userId);
       q.splice(idx, 1);
-      broadcastQueueStatus(q, cap);
-      console.log(`User ${entry.username} disconnected from ${cap}P queue.`);
+      if (q.length > 0) broadcastQueueStatus(q);
+      else queuesMap.delete(key);
+      console.log(`User ${entry.username} disconnected from queue ${key}.`);
     }
-  };
-  handle(queue2, 2);
-  handle(queue6, 6);
+  }
 }
 
 function matchPlayers(queue: QueueEntry[], capacity: number): void {
   const matched = queue.splice(0, capacity);
   matched.forEach(p => { clearTimeout(matchmakingTimers.get(p.userId)!); matchmakingTimers.delete(p.userId); });
 
+  const first = matched[0];
   const roomId = `Table_${Date.now()}`;
-  const p1 = matched[0];
-  const room = gm.createRoom(roomId, p1.userId, p1.username, capacity);
-  p1.socket.join(roomId);
-  const rp1 = room.players.find(p => p.id === p1.userId);
-  if (rp1) rp1.socketId = p1.socketId;
+  const room = gm.createRoom(roomId, first.userId, first.username, capacity, {
+    gameType: first.gameType,
+    stakePerPoint: first.stakePerPoint,
+    currencyType: first.currencyType,
+    rakePercent: 10,
+  });
+
+  first.socket.join(roomId);
+  const rp1 = room.players.find(p => p.id === first.userId);
+  if (rp1) rp1.socketId = first.socketId;
 
   for (let i = 1; i < matched.length; i++) {
     const p = matched[i];
@@ -92,23 +119,31 @@ function matchPlayers(queue: QueueEntry[], capacity: number): void {
   }
 
   gm.startGame(roomId);
-  console.log(`Matchmaking completed: Room ${roomId} automatically started (${capacity} players)`);
+  console.log(`Matchmaking completed: Room ${roomId} started (${capacity} players, Stake: ${first.stakePerPoint}/pt)`);
   sendRoomStateToAll(room);
   sendRoomListUpdate();
 }
 
-function triggerQueueTimeout(userId: string, format: string): void {
-  const q = format === '2players' ? queue2 : queue6;
-  const capacity = format === '2players' ? 2 : 6;
+function triggerQueueTimeout(userId: string, queueKey: string): void {
+  const q = queuesMap.get(queueKey);
+  if (!q) return;
+
   const idx = q.findIndex(p => p.userId === userId);
   if (idx === -1) return;
 
   const player = q.splice(idx, 1)[0];
-  broadcastQueueStatus(q, capacity);
+  if (q.length > 0) broadcastQueueStatus(q);
+  else queuesMap.delete(queueKey);
   matchmakingTimers.delete(userId);
 
   const roomId = `Table_${Date.now()}_Auto`;
-  const room = gm.createRoom(roomId, player.userId, player.username, capacity);
+  const room = gm.createRoom(roomId, player.userId, player.username, player.capacity, {
+    gameType: player.gameType,
+    stakePerPoint: player.stakePerPoint,
+    currencyType: player.currencyType,
+    rakePercent: 10,
+  });
+
   player.socket.join(roomId);
   const rp = room.players.find(p => p.id === player.userId);
   if (rp) rp.socketId = player.socketId;
@@ -125,13 +160,22 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('join_lobby', () => { socket.join('lobby'); sendRoomListUpdate(); });
 
-  socket.on('join_matchmaking', ({ format, userId, username }: { format: string; userId: string | number; username: string }) => {
-    if (!format || !userId) return;
+  socket.on('join_matchmaking', async (params: {
+    format?: string;
+    gameType?: 'points' | 'pool' | 'deals' | 'practice';
+    stakePerPoint?: number;
+    currencyType?: 'practice' | 'cash';
+    userId: string | number;
+    username: string;
+  }) => {
+    const { format = '2players', gameType = 'points', stakePerPoint = 10, currencyType = 'practice', userId, username } = params;
+    if (!userId) return;
     const uId = userId.toString();
+    const numUserId = parseInt(uId, 10);
 
-    if (format === '1vbot') {
+    if (format === '1vbot' || gameType === 'practice') {
       const roomId = `Practice_${socket.id}_${Date.now()}`;
-      const room = gm.createRoom(roomId, uId, username, '1vbot');
+      const room = gm.createRoom(roomId, uId, username, '1vbot', { gameType: 'practice', stakePerPoint: 0, currencyType: 'practice' });
       socket.join(roomId);
       const player = room.players.find(p => p.id === uId);
       if (player) player.socketId = socket.id;
@@ -142,17 +186,33 @@ io.on('connection', (socket: Socket) => {
       return;
     }
 
-    const q = format === '2players' ? queue2 : queue6;
+    // A23 Balance Pre-Validation
     const capacity = format === '2players' ? 2 : 6;
-    removeFromQueues(uId);
-    q.push({ userId: uId, username, socketId: socket.id, socket });
-    console.log(`User ${username} joined matchmaking for ${format}. Queue size: ${q.length}`);
-    broadcastQueueStatus(q, capacity);
+    const requiredBalance = gameType === 'points' ? stakePerPoint * 80 : 0;
+    if (numUserId > 0 && requiredBalance > 0) {
+      const hasBalance = await WalletModel.hasSufficientBalance(numUserId, currencyType, requiredBalance);
+      if (!hasBalance) {
+        socket.emit('error_message', `Insufficient wallet balance! Minimum required for ${stakePerPoint}/pt table is ${requiredBalance} ${currencyType === 'cash' ? 'Cash' : 'Chips'}.`);
+        return;
+      }
+    }
 
-    if (q.length >= capacity) {
-      matchPlayers(q, capacity);
+    removeFromQueues(uId);
+    const key = getQueueKey(gameType, capacity, currencyType, stakePerPoint);
+    let queue = queuesMap.get(key);
+    if (!queue) {
+      queue = [];
+      queuesMap.set(key, queue);
+    }
+
+    queue.push({ userId: uId, username, socketId: socket.id, socket, gameType, stakePerPoint, currencyType, capacity });
+    console.log(`User ${username} joined queue [${key}]. Queue size: ${queue.length}`);
+    broadcastQueueStatus(queue);
+
+    if (queue.length >= capacity) {
+      matchPlayers(queue, capacity);
     } else {
-      matchmakingTimers.set(uId, setTimeout(() => triggerQueueTimeout(uId, format), 7000));
+      matchmakingTimers.set(uId, setTimeout(() => triggerQueueTimeout(uId, key), 7000));
     }
   });
 
@@ -291,6 +351,9 @@ io.on('connection', (socket: Socket) => {
         winnerId: uId, winnerUsername: activePlayer.username,
         finalHands: room.players.map(p => ({ id: p.id, username: p.username, hand: p.hand, revealedPureSet: p.revealedPureSet })),
         joker: room.hiddenJoker,
+        settlementDetails: room.settlementDetails,
+        stakePerPoint: room.stakePerPoint,
+        currencyType: room.currencyType,
       });
       sendRoomListUpdate();
     } else {
@@ -347,6 +410,9 @@ async function handleAITurn(room: Room, aiPlayer: Player): Promise<void> {
       winnerId: aiPlayer.id, winnerUsername: aiPlayer.username,
       finalHands: room.players.map(p => ({ id: p.id, username: p.username, hand: p.hand, revealedPureSet: p.revealedPureSet })),
       joker: room.hiddenJoker,
+      settlementDetails: room.settlementDetails,
+      stakePerPoint: room.stakePerPoint,
+      currencyType: room.currencyType,
     });
     sendRoomListUpdate();
   } else {
@@ -375,6 +441,10 @@ function getPublicRoomState(room: Room, playerId: string | null) {
     deckCount: room.deck.length, discardPile: room.discardPile,
     topDiscard: room.discardPile[room.discardPile.length - 1] ?? null,
     maxPlayers: room.maxPlayers,
+    gameType: room.gameType,
+    stakePerPoint: room.stakePerPoint,
+    currencyType: room.currencyType,
+    settlementDetails: room.settlementDetails,
     players: room.players.map(p => ({
       id: p.id, username: p.username, cardCount: p.hand.length,
       hand: p.id === playerId ? p.hand : [],
@@ -399,4 +469,4 @@ function sendRoomListUpdate(): void {
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../../frontend/dist/index.html')));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-server.listen(ENV.PORT, () => console.log(`Superset game server running on port ${ENV.PORT}`));
+server.listen(ENV.PORT, '0.0.0.0', () => console.log(`Superset game server running on port ${ENV.PORT}`));

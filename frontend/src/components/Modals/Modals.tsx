@@ -75,7 +75,7 @@ export function PeekModal({ isOpen, joker, onClose }: { isOpen: boolean; joker: 
 
 // ── GameOverModal ─────────────────────────────────────────────────────────────
 export function GameOverModal({
-  isOpen, winnerId, winnerUsername, joker, finalHands, currentUserId, onClose,
+  isOpen, winnerId, winnerUsername, joker, finalHands, currentUserId, settlementDetails, stakePerPoint, currencyType, onClose,
 }: {
   isOpen: boolean;
   winnerId?: string;
@@ -83,15 +83,19 @@ export function GameOverModal({
   joker?: string;
   finalHands?: GameOverData['finalHands'];
   currentUserId?: number | string;
+  settlementDetails?: { winnerPayout: number; totalRake: number };
+  stakePerPoint?: number;
+  currencyType?: 'practice' | 'cash';
   onClose: () => void;
 }) {
   if (!isOpen) return null;
   const isSelf = winnerId === currentUserId?.toString();
   const jokerRank = joker ? getRank(joker) : null;
+  const currLabel = currencyType === 'cash' ? '₹ Cash' : 'Chips';
 
   return (
     <div className="modal-overlay">
-      <div className="modal-card glass-panel text-center">
+      <div className="modal-card glass-panel text-center" style={{ maxWidth: '520px' }}>
         <div className="win-trophy-container">
           <i className="fa-solid fa-trophy text-gold large-icon" />
         </div>
@@ -99,6 +103,23 @@ export function GameOverModal({
           {isSelf ? '🏆 Victory!' : 'Defeat'}
         </h2>
         <p>{isSelf ? 'You completed all four sets and won the match!' : `Winner: ${winnerUsername}`}</p>
+
+        {/* Business Settlement Summary */}
+        {settlementDetails && (settlementDetails.winnerPayout > 0 || settlementDetails.totalRake > 0) && (
+          <div style={{ background: 'rgba(0,230,118,0.1)', border: '1px solid rgba(0,230,118,0.3)', borderRadius: '8px', padding: '10px 15px', margin: '12px 0', textAlign: 'left' }}>
+            <div style={{ fontWeight: 700, color: '#00E676', marginBottom: '4px', fontSize: '0.9rem' }}>
+              💰 A23 Table Settlement ({stakePerPoint ?? 10}/pt):
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#ddd' }}>
+              <span>Winner Payout:</span>
+              <span style={{ fontWeight: 700, color: '#FFD700' }}>+{settlementDetails.winnerPayout.toFixed(currencyType === 'cash' ? 2 : 0)} {currLabel}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#aaa' }}>
+              <span>Platform Rake (10%):</span>
+              <span>{settlementDetails.totalRake.toFixed(currencyType === 'cash' ? 2 : 0)} {currLabel}</span>
+            </div>
+          </div>
+        )}
 
         <div className="game-over-details">
           <h4>Hidden Joker was:</h4>
@@ -124,7 +145,7 @@ export function GameOverModal({
             })}
           </div>
         </div>
-        <button onClick={onClose} className="glow-btn btn-cyan">Back to Lobby</button>
+        <button onClick={onClose} className="glow-btn btn-cyan" style={{ marginTop: '15px' }}>Back to Lobby</button>
       </div>
     </div>
   );

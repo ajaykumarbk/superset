@@ -3,7 +3,10 @@ node_modules/
 
 # Environment secrets – NEVER commit these
 .env
-.env.example
+.env.local
+.env.*.local
+
+# .env.example is a SAFE template and IS committed intentionally
 
 # Build output
 dist/

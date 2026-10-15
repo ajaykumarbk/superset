@@ -13,6 +13,15 @@ export interface PlayerState {
   online: boolean;
 }
 
+export interface WalletState {
+  userId: number;
+  practiceChips: number;
+  cashChips: number;
+  gems: number;
+  lastDailyBonus: string | null;
+  canClaimDailyBonus: boolean;
+}
+
 export interface RoomState {
   id: string;
   status: 'waiting' | 'playing' | 'finished';
@@ -26,6 +35,10 @@ export interface RoomState {
   discardPile: CardCode[];
   topDiscard: CardCode | null;
   maxPlayers: number;
+  gameType?: 'points' | 'pool' | 'deals' | 'practice';
+  stakePerPoint?: number;
+  currencyType?: 'practice' | 'cash';
+  settlementDetails?: { winnerPayout: number; totalRake: number };
   players: PlayerState[];
 }
 
@@ -39,6 +52,9 @@ export interface GameOverData {
   winnerUsername: string;
   finalHands: { id: string; username: string; hand: CardCode[]; revealedPureSet: CardCode[] | null }[];
   joker: CardCode;
+  settlementDetails?: { winnerPayout: number; totalRake: number };
+  stakePerPoint?: number;
+  currencyType?: 'practice' | 'cash';
 }
 
 export interface QueueStatus {

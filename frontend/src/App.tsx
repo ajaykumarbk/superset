@@ -9,10 +9,11 @@ import GameBoard from './components/Game/GameBoard';
 import { RulesModal, GameOverModal, PeekModal } from './components/Modals/Modals';
 
 import { useMatchmakingTimer } from './hooks/useMatchmaking';
-import type { CurrentUser, RoomState, GameOverData, QueueStatus } from './types';
+import type { CurrentUser, RoomState, GameOverData, QueueStatus, WalletState } from './types';
 
 export default function App() {
   const [currentUser,       setCurrentUser]       = useState<CurrentUser | null>(null);
+  const [wallet,            setWallet]            = useState<WalletState | null>(null);
   const [socket,            setSocket]            = useState<Socket | null>(null);
   const [activeView,        setActiveView]        = useState<'auth' | 'lobby' | 'game'>('auth');
   const [currentRoomState,  setCurrentRoomState]  = useState<RoomState | null>(null);
@@ -31,11 +32,22 @@ export default function App() {
 
   const matchmakingTimer = useMatchmakingTimer(!!matchmakingFormat);
 
+  const fetchWallet = () => {
+    fetch('/api/wallet/balance')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setWallet(data); })
+      .catch(console.error);
+  };
+
   // Verify session on mount
   useEffect(() => {
     fetch('/api/me')
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then((user: CurrentUser) => { setCurrentUser(user); setActiveView('lobby'); })
+      .then((user: CurrentUser) => {
+        setCurrentUser(user);
+        setActiveView('lobby');
+        fetchWallet();
+      })
       .catch(() => setActiveView('auth'));
   }, []);
 
@@ -61,8 +73,12 @@ export default function App() {
     s.on('game_over', (data: GameOverData) => {
       setGameOverData(data); setGameOverOpen(true);
       setCurrentRoomState(null); setSecretJoker(null); setLogs([]);
+      fetchWallet();
     });
-    s.on('error_message', (msg: string) => showFloatingError(msg));
+    s.on('error_message', (msg: string) => {
+      setMatchmakingFormat(null);
+      showFloatingError(msg);
+    });
 
     return () => { s.disconnect(); };
   }, [currentUser]);
@@ -79,14 +95,33 @@ export default function App() {
 
   const handleLogout = async () => {
     const res = await fetch('/api/logout', { method: 'POST' });
-    if (res.ok) { setCurrentUser(null); setActiveView('auth'); }
+    if (res.ok) { setCurrentUser(null); setWallet(null); setActiveView('auth'); }
   };
 
-  const handlePlayNow = (format: string) => {
+  const handleClaimDailyBonus = async () => {
+    try {
+      const res = await fetch('/api/wallet/daily-bonus', { method: 'POST' });
+      const data = await res.json();
+      if (data.success && data.wallet) {
+        setWallet(data.wallet);
+        showFloatingError(`🎉 ${data.message}`);
+      } else {
+        showFloatingError(data.message || 'Failed to claim daily bonus.');
+      }
+    } catch {
+      showFloatingError('Network error trying to claim bonus.');
+    }
+  };
+
+  const handlePlayNow = (options: { format: string; gameType: 'points' | 'pool' | 'deals' | 'practice'; stakePerPoint: number; currencyType: 'practice' | 'cash' }) => {
     if (!socket || !currentUser) return;
+    const { format, gameType, stakePerPoint, currencyType } = options;
     setQueueStatus({ position: 1, needed: format === '2players' ? 2 : 6 });
     if (format !== '1vbot') setMatchmakingFormat(format);
-    socket.emit('join_matchmaking', { format, userId: currentUser.id, username: currentUser.username });
+    socket.emit('join_matchmaking', {
+      format, gameType, stakePerPoint, currencyType,
+      userId: currentUser.id, username: currentUser.username
+    });
   };
 
   const handleCancelMatchmaking = () => {
@@ -102,10 +137,17 @@ export default function App() {
     <>
       <Layout>
         {activeView === 'auth' && (
-          <Auth onAuthSuccess={user => { setCurrentUser(user); setActiveView('lobby'); }} onRulesClick={() => setRulesOpen(true)} />
+          <Auth onAuthSuccess={user => { setCurrentUser(user); setActiveView('lobby'); fetchWallet(); }} onRulesClick={() => setRulesOpen(true)} />
         )}
         {activeView === 'lobby' && socket && currentUser && (
-          <Lobby currentUser={currentUser} onLogout={handleLogout} onPlayNow={handlePlayNow} onRulesClick={() => setRulesOpen(true)} />
+          <Lobby
+            currentUser={currentUser}
+            wallet={wallet}
+            onLogout={handleLogout}
+            onClaimDailyBonus={handleClaimDailyBonus}
+            onPlayNow={handlePlayNow}
+            onRulesClick={() => setRulesOpen(true)}
+          />
         )}
         {activeView === 'game' && socket && currentRoomState && currentUser && (
           <GameBoard
@@ -141,6 +183,7 @@ export default function App() {
       <GameOverModal
         isOpen={gameOverOpen} winnerId={gameOverData?.winnerId} winnerUsername={gameOverData?.winnerUsername}
         joker={gameOverData?.joker} finalHands={gameOverData?.finalHands} currentUserId={currentUser?.id}
+        settlementDetails={gameOverData?.settlementDetails} stakePerPoint={gameOverData?.stakePerPoint} currencyType={gameOverData?.currencyType}
         onClose={() => { setGameOverOpen(false); setGameOverData(null); setActiveView('lobby'); }}
       />
 

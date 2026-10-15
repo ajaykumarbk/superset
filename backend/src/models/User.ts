@@ -33,7 +33,8 @@ export const UserModel = {
   },
 
   async initStats(userId: number): Promise<void> {
-    await pool.query('INSERT INTO game_user_stats (user_id) VALUES ($1)', [userId]);
+    await pool.query('INSERT INTO game_user_stats (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [userId]);
+    await pool.query('INSERT INTO game_wallets (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [userId]);
   },
 
   async getLeaderboard(): Promise<{ username: string; games_played: number; wins: number }[]> {

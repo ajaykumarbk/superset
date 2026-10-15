@@ -1,5 +1,6 @@
 // backend/src/utils/gameManager.ts
 import { GameHistoryModel } from '../models/GameHistory';
+import { WalletModel } from '../models/Wallet';
 import {
   CardCode, createDeck, shuffle, isJoker, getCardRank, getCardSuit,
   isValidPureSet, findBestGroupings, checkWinCondition, findBestGroupings as _fbg,
@@ -13,6 +14,14 @@ export interface Player {
   isAI: boolean;
   socketId: string | null;
   turnsSinceReveal?: number;
+}
+
+export interface RoomOptions {
+  gameType?: 'points' | 'pool' | 'deals' | 'practice';
+  stakePerPoint?: number;
+  entryFee?: number;
+  currencyType?: 'practice' | 'cash';
+  rakePercent?: number;
 }
 
 export interface Room {
@@ -29,15 +38,41 @@ export interface Room {
   turnCount: number;
   winnerId: string | null;
   alreadyNotifiedDisclosed?: boolean;
+  // A23 Business Attributes
+  gameType: 'points' | 'pool' | 'deals' | 'practice';
+  stakePerPoint: number;
+  entryFee: number;
+  currencyType: 'practice' | 'cash';
+  rakePercent: number;
+  settled?: boolean;
+  settlementDetails?: { winnerPayout: number; totalRake: number };
 }
 
 export const rooms = new Map<string, Room>();
+
+export function calculateCardPenalty(card: CardCode): number {
+  const rank = getCardRank(card);
+  if (rank === 'A') return 1;
+  if (['J', 'Q', 'K'].includes(rank)) return 10;
+  const num = parseInt(rank, 10);
+  return isNaN(num) ? 10 : num;
+}
+
+export function calculatePlayerPenaltyPoints(player: Player): number {
+  if (!player.hand || player.hand.length === 0) return 0;
+  let pts = 0;
+  for (const card of player.hand) {
+    pts += calculateCardPenalty(card);
+  }
+  return Math.min(80, pts);
+}
 
 export function createRoom(
   roomId: string,
   creatorId: string,
   creatorUsername: string,
-  maxPlayers: number | string = 3
+  maxPlayers: number | string = 3,
+  options?: RoomOptions
 ): Room {
   const isVsBot = maxPlayers === '1vbot';
   const parsedMax = isVsBot ? 2 : Math.max(2, Math.min(6, parseInt(String(maxPlayers)) || 3));
@@ -55,6 +90,12 @@ export function createRoom(
     turnIndex: 0,
     turnCount: 0,
     winnerId: null,
+    gameType: options?.gameType || (isVsBot ? 'practice' : 'points'),
+    stakePerPoint: options?.stakePerPoint ?? (isVsBot ? 0 : 10),
+    entryFee: options?.entryFee ?? 0,
+    currencyType: options?.currencyType || 'practice',
+    rakePercent: options?.rakePercent ?? 10,
+    settled: false,
   };
 
   if (isVsBot) {
@@ -222,7 +263,30 @@ export { isValidPureSet, getCardRank, getCardSuit, checkWinCondition };
 export async function persistGameResult(room: Room): Promise<void> {
   try {
     await GameHistoryModel.persistResult(room);
+
+    if (!room.settled && room.gameType !== 'practice' && room.stakePerPoint > 0) {
+      room.settled = true;
+      const winnerNumericId = room.winnerId && !room.winnerId.startsWith('AI_') ? parseInt(room.winnerId, 10) : null;
+      const losers = room.players
+        .filter(p => p.id !== room.winnerId && !p.isAI)
+        .map(p => ({
+          userId: parseInt(p.id, 10),
+          penaltyPoints: calculatePlayerPenaltyPoints(p),
+        }));
+
+      const settlement = await WalletModel.settleA23Game({
+        roomId: room.id,
+        winnerId: winnerNumericId,
+        losers,
+        currencyType: room.currencyType,
+        stakePerPoint: room.stakePerPoint,
+        rakePercent: room.rakePercent,
+      });
+
+      room.settlementDetails = settlement;
+      console.log(`Room ${room.id} settled: Winner Payout=${settlement.winnerPayout}, Rake=${settlement.totalRake}`);
+    }
   } catch (err) {
-    console.error('Error persisting game result:', err);
+    console.error('Error persisting/settling game result:', err);
   }
 }

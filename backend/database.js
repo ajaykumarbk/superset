@@ -1,14 +1,17 @@
+// backend/database.js  (legacy CommonJS – kept for compatibility)
+// The TypeScript project uses src/config/database.ts instead.
 const { Pool } = require('pg');
 
+const isLocal = (process.env.NODE_ENV || 'development') === 'development';
+
 const pool = new Pool({
-  host: process.env.DB_HOST || '129.159.233.130',
-  user: process.env.DB_USER || 'myuser',
-  database: process.env.DB_DATABASE || 'mydb',
-  password: process.env.DB_PASSWORD || 'mypassword',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  ssl: {
-    rejectUnauthorized: false
-  },
+  host:     process.env.DB_HOST     || 'localhost',
+  user:     process.env.DB_USER     || 'superset',
+  database: process.env.DB_DATABASE || 'superset_db',
+  password: process.env.DB_PASSWORD || 'superset_local_pw',
+  port:     parseInt(process.env.DB_PORT || '5432'),
+  // Disable SSL for local dev; enable for production
+  ssl: isLocal ? false : { rejectUnauthorized: false },
   connectionTimeoutMillis: 5000
 });
 
