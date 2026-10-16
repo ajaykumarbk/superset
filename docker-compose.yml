@@ -1,23 +1,45 @@
 version: '3.9'
 
 services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: superset_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: superset
-      POSTGRES_PASSWORD: superset_local_pw
-      POSTGRES_DB: superset_db
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${DB_USER:-superset}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-superset_local_pw}
+      POSTGRES_DB: ${DB_DATABASE:-superset_db}
     volumes:
       - superset_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U superset -d superset_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-superset} -d ${DB_DATABASE:-superset_db}"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # ── App (backend + serves frontend) ──────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: superset_app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3001}:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      SESSION_SECRET: ${SESSION_SECRET:-superset-secret-key-change-me}
+      DB_HOST: postgres          # refers to the service name above
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-superset}
+      DB_DATABASE: ${DB_DATABASE:-superset_db}
+      DB_PASSWORD: ${DB_PASSWORD:-superset_local_pw}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   superset_pgdata:
