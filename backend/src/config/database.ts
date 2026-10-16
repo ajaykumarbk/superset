@@ -2,7 +2,9 @@
 import { Pool } from 'pg';
 import { ENV } from './env';
 
-const isLocal = ENV.NODE_ENV === 'development';
+// DB_SSL=true only when connecting to a cloud Postgres that requires SSL (e.g. Render, Railway)
+// Set DB_SSL=false (or leave unset) for local Docker Postgres
+const useSSL = ENV.DB_SSL === 'true';
 
 export const pool = new Pool({
   host:     ENV.DB_HOST,
@@ -10,8 +12,7 @@ export const pool = new Pool({
   database: ENV.DB_DATABASE,
   password: ENV.DB_PASSWORD,
   port:     ENV.DB_PORT,
-  // Disable SSL for local dev; enable (with rejectUnauthorized: false) for production
-  ssl: isLocal ? false : { rejectUnauthorized: false },
+  ssl: useSSL ? { rejectUnauthorized: false } : false,
   connectionTimeoutMillis: 15000,
   idleTimeoutMillis: 30000,
   max: 20,

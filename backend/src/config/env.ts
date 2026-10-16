@@ -13,4 +13,5 @@ export const ENV = {
   DB_USER:        process.env.DB_USER                 || 'superset',
   DB_DATABASE:    process.env.DB_DATABASE             || 'superset_db',
   DB_PASSWORD:    process.env.DB_PASSWORD             || 'superset_local_pw',
+  DB_SSL:         process.env.DB_SSL                  || 'false',
 } as const;
