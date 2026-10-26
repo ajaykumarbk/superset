@@ -32,18 +32,31 @@ export default function GameBoard({
 }: GameBoardProps) {
   const [selectedCards, setSelectedCards] = useState<string[]>([]);
   const [handGroups,    setHandGroups]    = useState<string[][]>([]);
-  const prevHandRef = useRef<string[]>([]);
+  const prevHandRef      = useRef<string[]>([]);
+  // Tracks whether we have drawn this turn (server-confirmed via hand size change)
+  const drawnThisTurn    = useRef<boolean>(false);
+  // Prevents double-click / rapid-fire actions
+  const actionInFlight   = useRef<boolean>(false);
 
   const self       = roomState?.players?.find(p => p.id === currentUser.id.toString());
   const actualHand = self ? self.hand : [];
 
   useEffect(() => {
     if (actualHand) {
-      if (actualHand.length === 14 && prevHandRef.current.length === 13) {
-        const newCard = actualHand.find(c => !prevHandRef.current.includes(c));
+      const prev = prevHandRef.current;
+      // Hand grew by 1 → draw was confirmed by server
+      if ((actualHand.length === 14 && prev.length === 13) ||
+          (actualHand.length === 10 && prev.length === 9)) {
+        const newCard = actualHand.find(c => !prev.includes(c));
         if (newCard) setSelectedCards([newCard]);
+        drawnThisTurn.current = true;
       }
-      setHandGroups(prev => reconcileGroups(prev, actualHand));
+      // Hand shrank back → discard was confirmed; reset draw flag
+      if ((actualHand.length === 13 && prev.length === 14) ||
+          (actualHand.length === 9  && prev.length === 10)) {
+        drawnThisTurn.current = false;
+      }
+      setHandGroups(g => reconcileGroups(g, actualHand));
       prevHandRef.current = actualHand;
     }
   }, [actualHand]);
@@ -54,20 +67,23 @@ export default function GameBoard({
   const hasDrawnCard = () => { const t = handGroups.flat().length; return t === 14 || t === 10; };
 
   const handleDraw = (source: 'deck' | 'discard') => {
-    if (!isMyTurn()) { showFloatingError('It is not your turn!'); return; }
-    if (hasDrawnCard()) { showFloatingError('You have already drawn a card! Discard to end turn.'); return; }
+    if (!isMyTurn())         { showFloatingError('It is not your turn!'); return; }
+    if (drawnThisTurn.current) { showFloatingError('You have already drawn a card! Discard to end your turn.'); return; }
+    if (actionInFlight.current) return; // debounce rapid clicks
+    actionInFlight.current = true;
+    setTimeout(() => { actionInFlight.current = false; }, 800);
     socket.emit('draw_card', { roomId: roomState.id, userId: currentUser.id, source });
   };
 
   const handleDiscardClick = () => {
-    if (!isMyTurn()) { showFloatingError('It is not your turn!'); return; }
-    if (!hasDrawnCard()) { showFloatingError('You must draw a card before discarding!'); return; }
-    if (selectedCards.length === 1) {
-      socket.emit('discard_card', { roomId: roomState.id, userId: currentUser.id, card: selectedCards[0] });
-      setSelectedCards([]);
-    } else {
-      showFloatingError('Select exactly 1 card from your hand to discard.');
-    }
+    if (!isMyTurn())             { showFloatingError('It is not your turn!'); return; }
+    if (!drawnThisTurn.current)  { showFloatingError('You must draw a card before discarding!'); return; }
+    if (selectedCards.length !== 1) { showFloatingError('Select exactly 1 card from your hand to discard.'); return; }
+    if (actionInFlight.current)  return; // debounce rapid clicks
+    actionInFlight.current = true;
+    setTimeout(() => { actionInFlight.current = false; }, 800);
+    socket.emit('discard_card', { roomId: roomState.id, userId: currentUser.id, card: selectedCards[0] });
+    setSelectedCards([]);
   };
 
   const handleToggleCard = (card: string) => {
@@ -183,8 +199,22 @@ export default function GameBoard({
               </div>
               <div className="deck-container">
                 <div className="deck-title">Discard</div>
-                <div onClick={() => isMyTurn() && hasDrawnCard() ? handleDiscardClick() : handleDraw('discard')}
-                  className="discard-pile-slot" style={{ cursor: 'pointer' }}>
+                {/* Separate click intent: draw from discard OR discard your selected card */}
+                <div
+                  onClick={() => {
+                    if (!isMyTurn()) { showFloatingError('It is not your turn!'); return; }
+                    if (drawnThisTurn.current) {
+                      // Already drew — this click means: discard selected card to pile
+                      handleDiscardClick();
+                    } else {
+                      // Haven't drawn yet — pick up from discard pile
+                      handleDraw('discard');
+                    }
+                  }}
+                  className="discard-pile-slot"
+                  style={{ cursor: 'pointer' }}
+                  title={isMyTurn() && drawnThisTurn.current ? 'Click to discard your selected card here' : 'Click to draw this card'}
+                >
                   {roomState.topDiscard && <Card cardCode={roomState.topDiscard} isSelected={false} isWildcard={false} />}
                 </div>
               </div>
@@ -236,11 +266,11 @@ export default function GameBoard({
               </button>
               <button onClick={handleClearGroups} className="action-btn"><i className="fa-solid fa-rotate-left" /> Reset Groups</button>
               <button onClick={handleDiscardClick} className="action-btn btn-rose-outline"
-                disabled={!isSelfTurn || !hasDrawnCard() || selectedCards.length !== 1}>
+                disabled={!isSelfTurn || !drawnThisTurn.current || selectedCards.length !== 1}>
                 <i className="fa-solid fa-trash-can" /> Discard Card
               </button>
               <button onClick={handleRevealPure} className="action-btn btn-gold-outline"
-                disabled={self.revealedPureSet !== null || selectedCards.length !== 4 || !isSelfTurn || !hasDrawnCard()}>
+                disabled={self.revealedPureSet !== null || selectedCards.length !== 4 || !isSelfTurn || !drawnThisTurn.current}>
                 <i className="fa-solid fa-star" /> Reveal Pure Set
               </button>
               {roomState.firstRevealer === currentUser.id.toString() && !roomState.jokerDisclosed && (
@@ -249,7 +279,7 @@ export default function GameBoard({
                 </button>
               )}
               <button onClick={handleDeclareWin} className="action-btn btn-emerald-outline"
-                disabled={!self.revealedPureSet || !isSelfTurn || handGroups.flat().length !== 10 || selectedCards.length !== 1}>
+                disabled={!self.revealedPureSet || !isSelfTurn || handGroups.flat().length !== 10 || selectedCards.length !== 1 || !drawnThisTurn.current}>
                 <i className="fa-solid fa-crown" /> Declare Win
               </button>
             </div>

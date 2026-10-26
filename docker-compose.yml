@@ -13,6 +13,8 @@ services:
       POSTGRES_DB: ${DB_DATABASE:-superset_db}
     volumes:
       - superset_pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"   # expose to host/WSL for local dev (not on network)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-superset} -d ${DB_DATABASE:-superset_db}"]
       interval: 5s
@@ -27,10 +29,10 @@ services:
     container_name: superset_app
     restart: unless-stopped
     ports:
-      - "${PORT:-3001}:3001"
+      - "${PORT:-5173}:5173"
     environment:
       NODE_ENV: production
-      PORT: 3001
+      PORT: 5173
       SESSION_SECRET: ${SESSION_SECRET:-superset-secret-key-change-me}
       DB_HOST: postgres          # refers to the service name above
       DB_PORT: 5432

@@ -45,6 +45,6 @@ COPY --from=backend-builder /app/backend/dist ./backend/dist
 # __dirname at runtime = /app/backend/dist  →  ../../frontend/dist = /app/frontend/dist
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
-EXPOSE 3001
+EXPOSE 5173
 
 CMD ["node", "backend/dist/index.js"]

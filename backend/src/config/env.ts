@@ -3,7 +3,7 @@
 // Values are read from .env (loaded by dotenv/config in index.ts).
 
 export const ENV = {
-  PORT:           parseInt(process.env.PORT           || '3001', 10),
+  PORT:           parseInt(process.env.PORT           || '5173', 10),
   NODE_ENV:       process.env.NODE_ENV                || 'development',
   SESSION_SECRET: process.env.SESSION_SECRET          || 'superset-local-dev-secret-key-change-me',
 
